@@ -2,18 +2,23 @@
 //!
 //! This driver was built using [`embedded-hal`] traits.
 //!
-//! [`embedded-hal`]: https://docs.rs/embedded-hal/~0.1
+//! When the "async" feature is enabled, async support is provided via [`embedded-hal-async`].
+//!
+//! [`embedded-hal`]: https://docs.rs/embedded-hal/1.0.0
+//! [`embedded-hal-async`]: https://docs.rs/embedded-hal-async/1.0.0
 //!
 
 #![deny(missing_docs)]
 #![deny(warnings)]
 #![no_std]
 
-extern crate embedded_hal as hal;
+extern crate embedded_hal;
+#[cfg(feature = "async")]
+extern crate embedded_hal_async;
 
-use hal::blocking::spi::Transfer;
-use hal::spi::{Mode, Phase, Polarity};
-use hal::digital::v2::OutputPin;
+use embedded_hal::spi::{SpiDevice, Mode, Phase, Polarity};
+#[cfg(feature = "async")]
+use embedded_hal_async::spi::SpiDevice as AsyncSpiDevice;
 
 /// SPI mode
 pub const MODE: Mode = Mode {
@@ -21,72 +26,126 @@ pub const MODE: Mode = Mode {
     polarity: Polarity::IdleLow,
 };
 
-/// MCP3008 driver
-pub struct Mcp3008<SPI, CS> {
-    spi: SPI,
-    cs: CS,
+/// Synchronous MCP3008 driver
+pub struct Mcp3008<SpiDev> {
+    spi_dev: SpiDev,
 }
 
-/// MCP3004 driver
-pub struct Mcp3004<SPI, CS> {
-    spi: SPI,
-    cs: CS,
+#[cfg(feature = "async")]
+/// Asynchronous MCP3008 driver
+///
+/// This struct is only available when the "async" feature is enabled.
+pub struct AsyncMcp3008<SpiDev> {
+    spi_dev: SpiDev,
 }
 
-impl<SPI, CS, E> Mcp3008<SPI, CS>
-    where SPI: Transfer<u8, Error = E>,
-          CS: OutputPin
+/// Synchronous MCP3004 driver
+pub struct Mcp3004<SpiDev> {
+    spi_dev: SpiDev,
+}
+
+#[cfg(feature = "async")]
+/// Asynchronous MCP3004 driver
+///
+/// This struct is only available when the "async" feature is enabled.
+pub struct AsyncMcp3004<SpiDev> {
+    spi_dev: SpiDev,
+}
+
+impl<SpiDev> Mcp3008<SpiDev>
+where
+    SpiDev: SpiDevice,
 {
-    /// Creates a new driver from an SPI peripheral and a chip select
-    /// digital I/O pin.
-    pub fn new(spi: SPI, cs: CS) -> Result<Self, E> {
-        let mcp3008 = Mcp3008 { spi: spi, cs: cs };
-
-        Ok(mcp3008)
+    /// Creates a new driver from an SPI device.
+    pub fn new(spi_dev: SpiDev) -> Self {
+        Mcp3008 { spi_dev }
     }
 
     /// Read a MCP3008 ADC channel and return the 10 bit value as a u16
-    pub fn read_channel(&mut self, ch: Channels8) -> Result<u16, E> {
-        let _ = self.cs.set_low();
+    pub fn read_channel(&mut self, ch: Channels8) -> Result<u16, SpiDev::Error> {
+        let write_buffer = [1, ((1 << 3) | (ch as u8)) << 4, 0];
+        let mut read_buffer = [0u8; 3];
 
-        let mut buffer = [0u8; 3];
-        buffer[0] = 1;
-        buffer[1] = ((1 << 3) | (ch as u8)) << 4;
+        self.spi_dev.transaction(&mut [
+            embedded_hal::spi::Operation::Write(&write_buffer),
+            embedded_hal::spi::Operation::Read(&mut read_buffer),
+        ])?;
 
-        self.spi.transfer(&mut buffer)?;
-
-        let _ = self.cs.set_high();
-
-        let r = (((buffer[1] as u16) << 8) | (buffer[2] as u16)) & 0x3ff;
+        let r = (((read_buffer[1] as u16) << 8) | (read_buffer[2] as u16)) & 0x3ff;
         Ok(r)
     }
 }
 
-impl<SPI, CS, E> Mcp3004<SPI, CS>
-    where SPI: Transfer<u8, Error = E>,
-          CS: OutputPin
+#[cfg(feature = "async")]
+impl<SpiDev> AsyncMcp3008<SpiDev>
+where
+    SpiDev: AsyncSpiDevice,
 {
-    /// Creates a new driver from an SPI peripheral and a chip select 
-    /// digital I/O pin.
-    pub fn new(spi: SPI, cs: CS) -> Result<Self, E> {
-        let mcp3004 = Mcp3004 { spi: spi, cs: cs };
+    /// Creates a new async driver from an SPI device.
+    pub fn new(spi_dev: SpiDev) -> Self {
+        AsyncMcp3008 { spi_dev }
+    }
 
-        Ok(mcp3004)
+    /// Read a MCP3008 ADC channel and return the 10 bit value as a u16
+    pub async fn read_channel(&mut self, ch: Channels8) -> Result<u16, SpiDev::Error> {
+        let write_buffer = [1, ((1 << 3) | (ch as u8)) << 4, 0];
+        let mut read_buffer = [0u8; 3];
+
+        self.spi_dev.transaction(&mut [
+            embedded_hal_async::spi::Operation::Write(&write_buffer),
+            embedded_hal_async::spi::Operation::Read(&mut read_buffer),
+        ]).await?;
+
+        let r = (((read_buffer[1] as u16) << 8) | (read_buffer[2] as u16)) & 0x3ff;
+        Ok(r)
+    }
+}
+
+impl<SpiDev> Mcp3004<SpiDev>
+where
+    SpiDev: SpiDevice,
+{
+    /// Creates a new driver from an SPI device.
+    pub fn new(spi_dev: SpiDev) -> Self {
+        Mcp3004 { spi_dev }
     }
 
     /// Read a MCP3004 ADC channel and return the 10 bit value as a u16
-    pub fn read_channel(&mut self, ch: Channels4) -> Result<u16, E> {
-        let _ = self.cs.set_low();
+    pub fn read_channel(&mut self, ch: Channels4) -> Result<u16, SpiDev::Error> {
+        let write_buffer = [1, ((1 << 3) | (ch as u8)) << 4, 0];
+        let mut read_buffer = [0u8; 3];
 
-        let mut buffer = [0u8; 3];
-        buffer[0] = 1;
-        buffer[1] = ((1 << 3) | (ch as u8)) << 4;
+        self.spi_dev.transaction(&mut [
+            embedded_hal::spi::Operation::Write(&write_buffer),
+            embedded_hal::spi::Operation::Read(&mut read_buffer),
+        ])?;
 
-        self.spi.transfer(&mut buffer)?;
+        let r = (((read_buffer[1] as u16) << 8) | (read_buffer[2] as u16)) & 0x3ff;
+        Ok(r)
+    }
+}
 
-        let _ = self.cs.set_high();
+#[cfg(feature = "async")]
+impl<SpiDev> AsyncMcp3004<SpiDev>
+where
+    SpiDev: AsyncSpiDevice,
+{
+    /// Creates a new async driver from an SPI device.
+    pub fn new(spi_dev: SpiDev) -> Self {
+        AsyncMcp3004 { spi_dev }
+    }
 
-        let r = (((buffer[1] as u16) << 8) | (buffer[2] as u16)) & 0x3ff;
+    /// Read a MCP3004 ADC channel and return the 10 bit value as a u16
+    pub async fn read_channel(&mut self, ch: Channels4) -> Result<u16, SpiDev::Error> {
+        let write_buffer = [1, ((1 << 3) | (ch as u8)) << 4, 0];
+        let mut read_buffer = [0u8; 3];
+
+        self.spi_dev.transaction(&mut [
+            embedded_hal_async::spi::Operation::Write(&write_buffer),
+            embedded_hal_async::spi::Operation::Read(&mut read_buffer),
+        ]).await?;
+
+        let r = (((read_buffer[1] as u16) << 8) | (read_buffer[2] as u16)) & 0x3ff;
         Ok(r)
     }
 }
